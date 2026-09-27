@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#fff8ec">
+<title>翻牌配对</title>
+<style>
+  :root{
+    --bg:#fff8ec; --ink:#3a2a1a; --back:#e8894a; --back-edge:#c96e32;
+    --face:#ffffff; --face-edge:#e6d6c2; --ok:#2e8b57; --ok-bg:#e6f6ec;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",sans-serif}
+  body{display:flex;flex-direction:column;height:100dvh;
+    padding:calc(12px + env(safe-area-inset-top)) 18px calc(18px + env(safe-area-inset-bottom))}
+  h1{margin:6px 0 0;text-align:center;font-size:clamp(24px,8.2vw,34px);white-space:nowrap;font-weight:800;line-height:1.3}
+  #msg{height:58px;display:flex;align-items:center;justify-content:center;
+    font-size:34px;font-weight:800;color:var(--ok);transition:opacity .3s}
+  #msg.hide{opacity:0}
+
+  #grid{flex:1;min-height:0;display:grid;gap:18px;
+    grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(3,1fr);
+    width:100%;max-width:520px;margin:0 auto}
+  @media (orientation:landscape){
+    #grid{grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(2,1fr);max-width:760px}
+  }
+
+  .card{position:relative;border:0;padding:0;margin:0;border-radius:22px;cursor:pointer;
+    font:inherit;touch-action:manipulation;
+    background:var(--back);box-shadow:0 6px 0 var(--back-edge);
+    display:flex;align-items:center;justify-content:center;
+    transition:transform .12s ease, background .2s ease, box-shadow .2s ease}
+  .card .sym{font-size:min(20vw,11dvh);line-height:1}
+  .card.back .sym{color:#fff;font-weight:800}
+  .card:active,.card.pressed{transform:translateY(4px) scale(.97);box-shadow:0 2px 0 var(--back-edge)}
+
+  .card.open{background:var(--face);box-shadow:0 6px 0 var(--face-edge);outline:6px solid #f4b400;outline-offset:-6px}
+  .card.open .sym{font-size:min(26vw,14dvh)}
+  .card.matched{background:var(--ok-bg);box-shadow:0 6px 0 #b7dfc5;outline:6px solid var(--ok);outline-offset:-6px}
+  .card.matched .sym{font-size:min(26vw,14dvh)}
+  .card.pop{animation:pop .35s ease}
+  @keyframes pop{50%{transform:scale(1.06)}}
+
+  #win{position:fixed;inset:0;background:var(--bg);display:none;
+    flex-direction:column;align-items:center;justify-content:center;gap:34px;padding:24px;text-align:center}
+  #win.show{display:flex}
+  #win .big{font-size:44px;font-weight:800;line-height:1.4;color:var(--ok)}
+  #win .emoji{font-size:90px;line-height:1}
+  #again{font:inherit;font-size:34px;font-weight:800;color:#fff;background:var(--back);border:0;
+    border-radius:24px;padding:22px 48px;min-width:260px;box-shadow:0 6px 0 var(--back-edge);
+    cursor:pointer;touch-action:manipulation}
+  #again:active{transform:translateY(4px);box-shadow:0 2px 0 var(--back-edge)}
+</style>
+</head>
+<body>
+  <h1>找出两个一样的图案</h1>
+  <div id="msg" class="hide">对了！</div>
+  <div id="grid"></div>
+
+  <div id="win" role="dialog">
+    <div class="emoji">🎉</div>
+    <div class="big">全部找到了！<br>真棒！</div>
+    <button id="again">再玩一次</button>
+  </div>
+
+<script>
+(() => {
+  const PICS = ['🍎', '🐼', '🌸'];
+  const grid = document.getElementById('grid');
+  const msg = document.getElementById('msg');
+  const win = document.getElementById('win');
+  let first = null, busy = false, found = 0, msgTimer = null;
+
+  // ---- 柔和的声音（音量很小，渐入渐出） ----
+  let ac = null;
+  function tone(freq, start, len) {
+    try {
+      ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+      const t = ac.currentTime + start, o = ac.createOscillator(), g = ac.createGain();
+      o.type = 'sine'; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.12, t + 0.05);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+      o.connect(g).connect(ac.destination); o.start(t); o.stop(t + len + 0.05);
+    } catch (e) {}
+  }
+  const soundMatch = () => { tone(523, 0, 0.35); tone(659, 0.15, 0.45); };
+  const soundWin = () => { tone(523, 0, 0.4); tone(659, 0.2, 0.4); tone(784, 0.4, 0.7); };
+
+  function shuffle(a) {
+    for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+    return a;
+  }
+
+  function showMsg(text) {
+    clearTimeout(msgTimer);
+    msg.textContent = text; msg.classList.remove('hide');
+    msgTimer = setTimeout(() => msg.classList.add('hide'), 1800);
+  }
+
+  function setOpen(card, open) {
+    card.classList.toggle('open', open);
+    card.classList.toggle('back', !open);
+    card.querySelector('.sym').textContent = open ? card.dataset.pic : '?';
+    card.setAttribute('aria-label', open ? '已翻开' : '背面');
+  }
+
+  function start() {
+    grid.innerHTML = ''; first = null; busy = false; found = 0;
+    win.classList.remove('show'); msg.classList.add('hide');
+    shuffle([...PICS, ...PICS]).forEach(pic => {
+      const b = document.createElement('button');
+      b.className = 'card back'; b.dataset.pic = pic;
+      b.innerHTML = '<span class="sym">?</span>';
+      b.setAttribute('aria-label', '背面');
+      b.addEventListener('click', () => tap(b));
+      grid.appendChild(b);
+    });
+  }
+
+  function tap(card) {
+    if (busy || card.classList.contains('open') || card.classList.contains('matched')) return;
+    setOpen(card, true);
+    card.classList.remove('pop'); void card.offsetWidth; card.classList.add('pop');
+    if (!first) { first = card; return; }
+
+    const second = card;
+    if (first.dataset.pic === second.dataset.pic) {
+      [first, second].forEach(c => { c.classList.remove('open'); c.classList.add('matched'); });
+      first = null; found++;
+      if (found === PICS.length) {
+        soundWin();
+        setTimeout(() => win.classList.add('show'), 700);
+      } else {
+        soundMatch(); showMsg('对了！');
+      }
+    } else {
+      busy = true;
+      const a = first; first = null;
+      setTimeout(() => { setOpen(a, false); setOpen(second, false); busy = false; }, 1400);
+    }
+  }
+
+  document.getElementById('again').addEventListener('click', start);
+  start();
+})();
+</script>
+</body>
+</html>
